@@ -30,7 +30,7 @@ class SchematicExport:
             for path in paths:
                 self._update_schematic7(path)
         else:
-            self.logger.info("Kicad 8+...")
+            self.logger.info("Kicad 8+ (including 10)...")
             for path in paths:
                 self._update_schematic(path)
 

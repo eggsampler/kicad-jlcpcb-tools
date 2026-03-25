@@ -10,6 +10,7 @@ from typing import Union
 
 from .helpers import (
     dict_factory,
+    get_dnp_value,
     get_exclude_from_bom,
     get_exclude_from_pos,
     get_lcsc_value,
@@ -34,12 +35,46 @@ class Store:
         self.update_from_board()
 
     def setup(self):
-        """Check if folders and database exist, setup if not."""
+        """Check if folders and database exist, setup if not.
+
+        If the existing database is corrupted (disk I/O error, malformed image),
+        it is backed up and recreated automatically.
+        """
         if not os.path.isdir(self.datadir):
             self.logger.info(
                 "Data directory 'jlcpcb' does not exist and will be created."
             )
             Path(self.datadir).mkdir(parents=True, exist_ok=True)
+        try:
+            self.create_db()
+            # Quick integrity check to detect corruption early
+            self._check_db_integrity()
+        except sqlite3.DatabaseError as e:
+            self.logger.error(
+                "Database file appears to be corrupted: %s. "
+                "Backing up and recreating.",
+                e,
+            )
+            self._backup_and_recreate_db()
+
+    def _check_db_integrity(self):
+        """Run a quick integrity check on the database."""
+        with contextlib.closing(sqlite3.connect(self.dbfile)) as con:
+            result = con.execute("PRAGMA integrity_check").fetchone()
+            if result[0] != "ok":
+                raise sqlite3.DatabaseError(f"Integrity check failed: {result[0]}")
+
+    def _backup_and_recreate_db(self):
+        """Backup a corrupted database file and create a fresh one."""
+        if os.path.exists(self.dbfile):
+            backup_path = self.dbfile + ".corrupted"
+            # Remove old backup if it exists
+            if os.path.exists(backup_path):
+                os.remove(backup_path)
+            os.rename(self.dbfile, backup_path)
+            self.logger.info(
+                "Corrupted database backed up to %s", backup_path
+            )
         self.create_db()
 
     def set_order_by(self, n: int):
@@ -171,14 +206,21 @@ class Store:
     def update_from_board(self):
         """Read all footprints from the board and insert them into the database if they do not exist."""
         for fp in get_valid_footprints(self.board):
+            # Auto-set exclude flags if DNP parameter is detected
+            dnp_detected = get_dnp_value(fp)
             board_part = {
                 "reference": fp.GetReference(),
                 "value": fp.GetValue(),
                 "footprint": str(fp.GetFPID().GetLibItemName()),
                 "lcsc": get_lcsc_value(fp),
-                "exclude_from_bom": get_exclude_from_bom(fp),
-                "exclude_from_pos": get_exclude_from_pos(fp),
+                "exclude_from_bom": get_exclude_from_bom(fp) or dnp_detected,
+                "exclude_from_pos": get_exclude_from_pos(fp) or dnp_detected,
             }
+            if dnp_detected:
+                self.logger.debug(
+                    "Part %s has DNP parameter set, auto-excluding from BOM and POS.",
+                    fp.GetReference(),
+                )
             db_part = self.get_part(board_part["reference"])
             # if part is not in the database yet, create it
             if not db_part:
@@ -225,6 +267,22 @@ class Store:
                             board_part["reference"],
                         )
                     self.update_part(board_part)
+                # if DB has lcsc but the board's LCSC field was cleared, respect the clearing
+                elif db_part and db_part["lcsc"] and not board_part["lcsc"]:
+                    if self.parent.settings.get("general", {}).get(
+                        "lcsc_priority", True
+                    ):
+                        self.logger.debug(
+                            "Part %s had LCSC %s in database but board LCSC field is now empty, clearing.",
+                            board_part["reference"],
+                            db_part["lcsc"],
+                        )
+                        self.update_part(board_part)
+                    else:
+                        self.logger.debug(
+                            "Part %s board LCSC is empty but database value preserved (lcsc_priority=False).",
+                            board_part["reference"],
+                        )
             else:
                 # If something changed, we overwrite the part and dump the lcsc value or use the one supplied by the board
                 self.logger.debug(

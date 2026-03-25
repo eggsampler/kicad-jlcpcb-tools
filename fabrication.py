@@ -29,8 +29,13 @@ from pcbnew import (  # pylint: disable=import-error
     FromMM,
     Refresh,
     ToMM,
-    wxPoint,
 )
+
+# wxPoint was removed in KiCad 10, use VECTOR2I as replacement
+try:
+    from pcbnew import wxPoint  # pylint: disable=import-error
+except ImportError:
+    wxPoint = VECTOR2I
 
 # Compatibility hack for V6 / V7 / V7.99
 try:
@@ -39,6 +44,8 @@ try:
     NO_DRILL_SHAPE = DRILL_MARKS_NO_DRILL_SHAPE
 except ImportError:
     NO_DRILL_SHAPE = PCB_PLOT_PARAMS.NO_DRILL_SHAPE
+
+from .helpers import get_dnp_value  # noqa: E402  pylint: disable=wrong-import-position
 
 
 class Fabrication:
@@ -194,6 +201,12 @@ class Fabrication:
             self.parent.settings.get("gerber", {}).get("plot_references", True)
         )
 
+        # Ensure footprint text (including values assigned to silkscreen) is plotted
+        if hasattr(popt, "SetPlotFPText"):
+            popt.SetPlotFPText(True)
+        if hasattr(popt, "SetPlotInvisibleText"):
+            popt.SetPlotInvisibleText(False)
+
         popt.SetSketchPadsOnFabLayers(False)
 
         # Gerber Options
@@ -345,6 +358,13 @@ class Fabrication:
                     continue
                 if part["exclude_from_pos"] == 1:
                     continue
+                # Check DNP parameter and skip if component should not be placed
+                if get_dnp_value(fp):
+                    self.logger.info(
+                        "Component %s has DNP parameter: excluding from CPL",
+                        fp.GetReference(),
+                    )
+                    continue
                 if not add_without_lcsc and not part["lcsc"]:
                     continue
                 try:  # Kicad <= 8.0
@@ -382,18 +402,13 @@ class Fabrication:
             writer.writerow(["Comment", "Designator", "Footprint", "LCSC", "Quantity"])
             for part in self.parent.store.read_bom_parts():
                 components = part["refs"].split(",")
-                for component in components:
+                for component in list(components):
                     for fp in self.board.Footprints():
-                        if (
-                            fp.GetReference() == component
-                            and hasattr(fp, "IsDNP")
-                            and callable(fp.IsDNP)
-                            and fp.IsDNP()
-                        ):
+                        if fp.GetReference() == component and get_dnp_value(fp):
                             components.remove(component)
                             part["refs"] = ",".join(components)
                             self.logger.info(
-                                "Component %s has 'Do not place' enabled: removing from BOM",
+                                "Component %s has DNP parameter: removing from BOM",
                                 component,
                             )
                 if not add_without_lcsc and not part["lcsc"]:

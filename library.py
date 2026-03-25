@@ -224,8 +224,14 @@ class Library:
             for w in keywords:
                 # skip over empty keywords
                 if w != "":
-                    if len(w) < 3:  # LIKE entry
-                        kw = f"description LIKE '%{w}%'"
+                    if len(w) < 3:  # LIKE entry - search across key columns
+                        kw = (
+                            f'("LCSC Part" LIKE \'%{w}%\''
+                            f' OR "Description" LIKE \'%{w}%\''
+                            f' OR "MFR.Part" LIKE \'%{w}%\''
+                            f' OR "Package" LIKE \'%{w}%\''
+                            f' OR "Manufacturer" LIKE \'%{w}%\')'
+                        )
                         like_chunks.append(kw)
                     else:  # MATCH entry
                         kw = f'"{w}"'

@@ -130,19 +130,62 @@ def set_lcsc_value(fp, lcsc: str):
         fp.SetField(lcsc_field.GetName(), lcsc)
     else:
         fp.SetField("LCSC", lcsc)
-        field = fp.GetFieldByName("LCSC")
-        field.SetVisible(False)
+        # GetFieldByName was removed in KiCad 10; find the field by iterating
+        for f in fp.GetFields():
+            if f.GetName() == "LCSC":
+                f.SetVisible(False)
+                break
 
 
-def get_valid_footprints(board):
+def get_dnp_value(fp):
+    """Get DNP (Do Not Populate) status from footprint fields or native flag.
+
+    Checks in order:
+    1. Native IsDNP() flag (KiCad 7.99+)
+    2. DNP field in footprint properties (KiCad 7.99+)
+    3. DNP property key (KiCad <= V7)
+    Returns True if the component should not be populated.
+    """
+    # Check native IsDNP flag first (KiCad 7.99+)
+    if hasattr(fp, "IsDNP") and callable(fp.IsDNP) and fp.IsDNP():
+        return True
+    # Check fields for DNP parameter (KiCad 7.99+)
+    try:
+        for field in fp.GetFields():
+            if field.GetName().upper() in ("DNP", "DO_NOT_POPULATE"):
+                val = field.GetText().strip().upper()
+                if val in ("1", "YES", "TRUE", "DNP"):
+                    return True
+    except AttributeError:
+        # KiCad <= V7 - check properties
+        try:
+            for key, value in fp.GetProperties().items():
+                if key.upper() in ("DNP", "DO_NOT_POPULATE"):
+                    if value.strip().upper() in ("1", "YES", "TRUE", "DNP"):
+                        return True
+        except AttributeError:
+            pass
+    return False
+
+
+def should_exclude_from_bom_or_pos(fp):
+    """Check if footprint should be excluded from BOM/POS based on DNP parameter."""
+    return get_dnp_value(fp) or get_exclude_from_bom(fp) or get_exclude_from_pos(fp)
+
+
+def get_valid_footprints(board, max_ref_length=20):
     """Get all footprints that have a valid reference.
 
-    Drop all REF** for example
-    Drop kibuzzard footprints (length check)
+    Drop all REF** for example.
+    Drop kibuzzard footprints and other invalid references (length check).
+    The max_ref_length parameter defaults to 20, which is generous enough to
+    support references like SDCARD-1 while still filtering out kibuzzard
+    footprints which tend to have very long generated reference strings.
     """
     footprints = []
     for fp in board.GetFootprints():
-        if re.match(r"[\w\d-]+", fp.GetReference()) and len(fp.GetReference()) < 8:
+        ref = fp.GetReference()
+        if re.match(r"[\w\d-]+", ref) and len(ref) < max_ref_length:
             footprints.append(fp)
     return footprints
 

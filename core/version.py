@@ -22,6 +22,11 @@ def is_version6(version: str) -> bool:
     return _is_version_in_range(version, "5.99", "7.0")
 
 
+def is_version10_or_later(version: str) -> bool:
+    """Check if version is 10 or later."""
+    return _is_version_in_range(version, "9.99", "99.0")
+
+
 def test_version():
     """Tests for the various is_versionX() functions."""
     v6 = "6.1"
@@ -30,6 +35,8 @@ def test_version():
     v7rc1 = "7.0.1-rc1-378-ge76fd128c3"
     v8 = "8.2.3"
     v9 = "9.0.1-rc1"
+    v10 = "10.0.0"
+    v10rc = "10.0.0-rc2"
 
     assert is_version6(v6)
     assert not is_version6(v7)
@@ -43,3 +50,8 @@ def test_version():
     assert not is_version6(v9)
     assert not is_version7(v8)
     assert not is_version7(v9)
+
+    assert is_version10_or_later(v10)
+    assert is_version10_or_later(v10rc)
+    assert not is_version10_or_later(v9)
+    assert not is_version10_or_later(v8)

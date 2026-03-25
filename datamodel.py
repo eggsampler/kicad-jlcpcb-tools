@@ -121,16 +121,32 @@ class PartListDataModel(dv.PyDataViewModel):
 
     def Compare(self, item1, item2, column, ascending):
         """Override to implement natural sorting."""
-        val1 = self.GetValue(item1, column)
-        val2 = self.GetValue(item2, column)
-
-        key1 = self.natural_sort_key(val1)
-        key2 = self.natural_sort_key(val2)
+        # Icon columns (BOM, POS, SIDE) store icon objects, not strings.
+        # Compare them by checking whether the icon matches the "enabled" icon
+        # (index 0), giving a sortable boolean value.
+        if column in [
+            self.columns["BOM_COL"],
+            self.columns["POS_COL"],
+        ]:
+            row1 = self.ItemToObject(item1)
+            row2 = self.ItemToObject(item2)
+            val1 = 0 if row1[column] == self.bom_pos_icons[0] else 1
+            val2 = 0 if row2[column] == self.bom_pos_icons[0] else 1
+        elif column == self.columns["SIDE_COL"]:
+            row1 = self.ItemToObject(item1)
+            row2 = self.ItemToObject(item2)
+            val1 = 0 if row1[column] == self.side_icons[0] else 1
+            val2 = 0 if row2[column] == self.side_icons[0] else 1
+        else:
+            val1 = self.GetValue(item1, column)
+            val2 = self.GetValue(item2, column)
+            val1 = self.natural_sort_key(val1)
+            val2 = self.natural_sort_key(val2)
 
         if ascending:
-            return (key1 > key2) - (key1 < key2)
+            return (val1 > val2) - (val1 < val2)
         else:
-            return (key2 > key1) - (key2 < key1)
+            return (val2 > val1) - (val2 < val1)
 
     def find_index(self, ref):
         """Get the index of a part within the data list by its reference."""

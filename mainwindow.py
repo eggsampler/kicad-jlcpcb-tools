@@ -434,7 +434,7 @@ class JLCPCBTools(wx.Dialog):
         type.SetSortable(True)
         stock.SetSortable(True)
         bom.SetSortable(True)
-        pos.SetSortable(False)
+        pos.SetSortable(True)
         correction.SetSortable(True)
         side.SetSortable(True)
         params.SetSortable(True)
@@ -894,6 +894,36 @@ class JLCPCBTools(wx.Dialog):
         ) as j:
             json.dump(self.settings, j)
 
+    def _keyword_from_footprint_fields(self, ref):
+        """Get keyword from footprint fields, checking PART NUMBER, MPN, LCSC in priority order."""
+        for fp in self.pcbnew.GetBoard().GetFootprints():
+            if fp.GetReference() != ref:
+                continue
+            try:
+                for field in fp.GetFields():
+                    name = field.GetName().upper()
+                    if name in ("PART NUMBER", "PART_NUMBER", "PARTNUMBER"):
+                        val = field.GetText().strip()
+                        if val:
+                            return val
+                for field in fp.GetFields():
+                    name = field.GetName().upper()
+                    if name == "MPN":
+                        val = field.GetText().strip()
+                        if val:
+                            return val
+                for field in fp.GetFields():
+                    name = field.GetName().upper()
+                    if name in ("LCSC", "LCSC_PN", "JLC_PN"):
+                        val = field.GetText().strip()
+                        if val:
+                            return val
+            except AttributeError:
+                # KiCad <= V7 doesn't have GetFields on footprints
+                pass
+            break
+        return None
+
     def select_part(self, *_):
         """Select a part from the library and assign it to the selected footprint(s)."""
         selection = {}
@@ -901,6 +931,11 @@ class JLCPCBTools(wx.Dialog):
             ref = self.partlist_data_model.get_reference(item)
             value = self.partlist_data_model.get_value(item)
             footprint = self.partlist_data_model.get_footprint(item)
+            # Try to use PART NUMBER, MPN, or LCSC as keyword (PR #642)
+            field_keyword = self._keyword_from_footprint_fields(ref)
+            if field_keyword:
+                selection[ref] = field_keyword
+                continue
             if ref.startswith("R"):
                 """ Auto remove alphabet unit if applicable """
                 if value.endswith("R") or value.endswith("r") or value.endswith("o"):
@@ -911,6 +946,28 @@ class JLCPCBTools(wx.Dialog):
                 value += f" {m.group(1)}"
             selection[ref] = value
         PartSelectorDialog(self, selection).ShowModal()
+
+    @staticmethod
+    def _is_filled_rect(drawing):
+        """Check if a PCB_SHAPE is a filled rectangle, compatible across KiCad versions.
+
+        KiCad 10 removed IsFilled()/GetFilled() and may have renamed S_RECT.
+        """
+        try:
+            is_rect = drawing.GetShape() == kicad_pcbnew.S_RECT
+        except AttributeError:
+            try:
+                is_rect = drawing.GetShape() == kicad_pcbnew.SHAPE_T_RECT
+            except AttributeError:
+                return False
+        if not is_rect:
+            return False
+        # Try multiple ways to check if the shape is filled (KiCad 10 compat)
+        for method in ("IsFilled", "GetFilled"):
+            if hasattr(drawing, method) and callable(getattr(drawing, method)):
+                return getattr(drawing, method)()
+        # Fallback: assume filled if SetFilled exists (KiCad 10 has SetFilled but no getter)
+        return hasattr(drawing, "SetFilled")
 
     def count_order_number_placeholders(self):
         """Count the JLC order/serial number placeholders."""
@@ -928,10 +985,8 @@ class JLCPCBTools(wx.Dialog):
                         )
                         count += 1
 
-                if (
-                    isinstance(drawing, kicad_pcbnew.PCB_SHAPE)
-                    and drawing.GetShape() == kicad_pcbnew.S_RECT
-                    and drawing.IsFilled()
+                if isinstance(drawing, kicad_pcbnew.PCB_SHAPE) and self._is_filled_rect(
+                    drawing
                 ):
                     corners = drawing.GetRectCorners()
 
